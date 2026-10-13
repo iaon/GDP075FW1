@@ -1,0 +1,131 @@
+name: Build firmware
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'scripts/build-release.sh'
+      - 'scripts/check_release.py'
+      - 'scripts/run_tests.py'
+      - 'scripts/version_flags.py'
+      - 'platformio.ini'
+      - 'partitions.csv'
+      - 'VERSION'
+      - '.github/workflows/build-firmware.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'scripts/build-release.sh'
+      - 'scripts/check_release.py'
+      - 'scripts/run_tests.py'
+      - 'scripts/version_flags.py'
+      - 'platformio.ini'
+      - 'partitions.csv'
+      - 'VERSION'
+      - '.github/workflows/build-firmware.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Restore PlatformIO packages
+        uses: actions/cache@v5
+        with:
+          path: .platformio
+          key: platformio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            platformio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: python -m pip install 'platformio==6.2.0'
+
+      - name: Test firmware logic and simulated faults
+        run: python scripts/run_tests.py --sanitize
+
+      - name: Determine firmware version
+        id: version
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            [[ "$GITHUB_REF_NAME" == "v$version" ]]
+          else
+            version="$version-dev.${GITHUB_SHA::12}"
+          fi
+
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build release images
+        env:
+          PLATFORMIO_CORE_DIR: ${{ github.workspace }}/.platformio
+          FIRMWARE_GIT_SHA: ${{ github.sha }}
+          FIRMWARE_VERSION: ${{ steps.version.outputs.value }}
+        run: PIO=pio scripts/build-release.sh
+
+      - name: Package firmware
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          mkdir -p dist
+          cp gdp075fw1-app-rebuilt.bin "dist/firmware-${VERSION}.bin"
+          cp gdp075fw1-factory-rebuilt.bin "dist/gdp075fw1-factory-${VERSION}.bin"
+          (
+            cd dist
+            sha256sum *.bin > SHA256SUMS
+          )
+
+      - name: Upload firmware images
+        uses: actions/upload-artifact@v7
+        with:
+          name: gdp075fw1-firmware-${{ steps.version.outputs.value }}
+          if-no-files-found: error
+          path: dist/
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download firmware images
+        uses: actions/download-artifact@v7
+        with:
+          name: gdp075fw1-firmware-${{ needs.build.outputs.version }}
+          path: release
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" release/*.bin release/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --generate-notes

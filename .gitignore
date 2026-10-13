@@ -1,0 +1,15 @@
+.pio/
+.platformio/
+.venv/
+.vscode/
+app0-original.bin
+gdp075fw1-app-rebuilt.bin
+gdp075fw1-factory-rebuilt.bin
+dist/
+*.elf
+__pycache__/
+*.py[cod]
+/GDP075FW1-backup.bin
+/.aws/
+/.agents/
+/.codex/
