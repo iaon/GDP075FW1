@@ -97,6 +97,28 @@ This produces `gdp075fw1-app-rebuilt.bin` for an application update at
 `0x10000`, and `gdp075fw1-factory-rebuilt.bin`, a 4 MiB image for a blank
 flash chip.
 
+### Release v0.1.0
+
+The first release includes the corrected status refresh/retry behaviour,
+recovered vendor fonts/colours, boot diagnostics, UART Wi-Fi provisioning,
+native TCP/HTTP picture upload and the documented Linux conversion workflow.
+The user confirmed stable operation, Wi-Fi setup and rotated-picture upload
+on their board. Other board revisions, vendor ImageToWiFi interoperability
+and long-duration/fault testing remain unverified.
+
+The [v0.1.0 release](https://github.com/iaon/GDP075FW1/releases/tag/v0.1.0)
+provides these assets:
+
+| Asset | Use |
+|---|---|
+| `firmware-0.1.0.bin` | Application update at `0x10000`; preserves NVS/SPIFFS with the matching partition layout |
+| `gdp075fw1-factory-0.1.0.bin` | Complete 4 MiB image at `0x0`; overwrites settings and stored files |
+| `SHA256SUMS` | SHA-256 checksums of both firmware images |
+
+Verify downloaded files with `sha256sum -c SHA256SUMS`. A complete flash
+comparison after boot will differ in NVS/SPIFFS because those are writable
+runtime data, not immutable application code.
+
 The configuration pins `espressif32@7.1.3`. It builds an ordinary ESP32 image
 for the `wemos_d1_mini32` board definition, chosen for ESP32-WROOM-32D; it
 does not target ESP32-S3.

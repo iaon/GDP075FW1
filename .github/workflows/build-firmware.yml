@@ -128,4 +128,5 @@ jobs:
           gh release create "$TAG" release/*.bin release/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TAG" \
+            --notes "Application image: flash at 0x10000 to preserve NVS and SPIFFS with the matching partition layout. Factory image: flash at 0x0; overwrites all 4 MiB, including Wi-Fi settings and stored files. Verify downloads with SHA256SUMS. Source reconstruction, not a byte-identical vendor rebuild; hardware verification limits and Linux setup/upload instructions are documented in README.md." \
             --generate-notes

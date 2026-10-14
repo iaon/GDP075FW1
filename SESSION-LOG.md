@@ -163,3 +163,14 @@ Hardware claims are explicitly user-reported and limited to the tested board
 and workflow; ImageToWiFi interoperability and fault/long-duration scenarios
 remain unverified. This follow-up documents the existing firmware behaviour
 without changing the UART timeout or automatically accessing the board.
+
+## First release preparation
+
+Prepared v0.1.0 using the existing VERSION=0.1.0 and tag-driven release
+workflow. Before preparation, origin/main matched 0f02803, there were no
+remote tags or published releases, and its GitHub Actions build had succeeded.
+README now identifies the versioned application/factory assets, their flash
+addresses, checksum verification and hardware verification limits. The release
+workflow includes flash/data-preservation instructions in its generated notes.
+Flash dumps, locally generated images and personal pictures remain excluded
+from Git and from release assets.
