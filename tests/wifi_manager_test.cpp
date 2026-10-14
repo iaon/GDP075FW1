@@ -101,6 +101,26 @@ int main() {
     assert(!bad.ready() && bad.takeStatusUpdate());
   }
 
+  // Regression: failed retries requested a full refresh every ~60 seconds,
+  // mimicking a bootloop. Only the first failure and state changes redraw.
+  testhw::reset();
+  testhw::clockMs = 0xffff0000;  // Include millis wrap during retry cycles.
+  WifiManager retries; retries.begin();
+  for (unsigned attempt = 1; attempt <= 5; ++attempt) {
+    testhw::clockMs += 30000; retries.poll();
+    assert(!retries.ready() && retries.attempts() == attempt);
+    assert(retries.takeStatusUpdate() == (attempt == 1));
+    assert(!retries.takeStatusUpdate() && !ESP.restarts);
+    if (attempt != 5) { testhw::clockMs += 30000; retries.poll(); }
+  }
+  assert(Serial.output.find("WIFI timeout phase=DHCP") != std::string::npos);
+  testhw::clockMs += 30000; retries.poll(); connect(retries);
+  assert(retries.takeStatusUpdate());
+  WiFi.statusValue = WL_IDLE_STATUS; retries.poll();
+  testhw::clockMs += 30000; retries.poll();
+  testhw::clockMs += 30000; retries.poll();
+  assert(!retries.ready() && retries.takeStatusUpdate() && !ESP.restarts);
+
   // Serial remains usable during connection attempts and saves actual I32 NVS.
   testhw::reset(); WifiManager serial; serial.begin();
   Serial.feed("WIFI \"New network\" \"\" 93\n");
@@ -139,6 +159,32 @@ int main() {
   testhw::clockMs += 2000; timeout.poll();
   assert(ESP.restarts == 0 && !testnvs::namespaces.count("wifi_config"));
   assert(Serial.output.find("Invalid data length") != std::string::npos);
+  assert(Serial.output.find("received=4 expected=64") != std::string::npos);
+
+  for (const char *ending : {"\n", "\r", "\r\n"}) {
+    testhw::reset(); WifiManager terminal; terminal.begin();
+    Serial.feed(ending); terminal.poll();
+    testhw::clockMs += 2000; terminal.poll();
+    assert(Serial.output.find("Invalid data length") == std::string::npos);
+    assert(Serial.output.find("ignored standalone line ending") != std::string::npos);
+    assert(!ESP.restarts && !testnvs::namespaces.count("wifi_config"));
+  }
+
+  // CR/LF are also valid binary SSID lengths. Do not discard them at receive
+  // time, or a continuation buffered during a slow display refresh.
+  for (unsigned length : {10u, 13u}) {
+    testhw::reset(); WifiManager binary; binary.begin();
+    auto longPacket = packet;
+    longPacket[0] = length;
+    memset(longPacket.data() + 1, 0, 29);
+    memset(longPacket.data() + 1, 'A', length);
+    Serial.feed(std::vector<uint8_t>{longPacket[0]}); binary.poll();
+    testhw::clockMs += 25000;
+    Serial.feed(std::vector<uint8_t>(longPacket.begin() + 1, longPacket.end()));
+    try { binary.poll(); } catch (const Restarted &) {}
+    assert(ESP.restarts == 1);
+    assert(testnvs::namespaces["wifi_config"]["ssid"].text == std::string(length, 'A'));
+  }
 
   testhw::reset(); fakeResetReason = ESP_RST_SW;
   testnvs::namespaces["restart_counter"]["count"] = {testnvs::Value::I32, "", 7};

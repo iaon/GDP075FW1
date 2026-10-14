@@ -1,5 +1,6 @@
 import hashlib
 import io
+import re
 import struct
 import sys
 import unittest
@@ -10,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from check_release import validate_image
 from device import provisioning_packet
 from scan_images import scan
+from vendor_fonts import font_header
 
 
 def esp_image():
@@ -68,6 +70,23 @@ class SenderChecks(unittest.TestCase):
                                       ("ssid", "", 0), ("ssid", "", 255)):
             with self.assertRaises(ValueError):
                 provisioning_packet(ssid, password, host)
+
+
+class FontChecks(unittest.TestCase):
+    def test_committed_fonts_have_original_hashes(self):
+        header = (Path(__file__).resolve().parents[1] / "src/vendor_fonts.h").read_text()
+        for name, size, expected in (
+                ("kFont20", 3800, "fa3edf3b21f2dd9baaec010dc6401baf0d7f6c800bad9b795f2de4e25a1181a5"),
+                ("kFont24", 6840, "e62d5ac70d4d5b233e2495db66cbdb28b4b7efbadeba172d293214b3b23402fb")):
+            table = header.split(f"{name}[] =", 1)[1].split(";", 1)[0]
+            glyphs = bytes(int(value, 16) for value in re.findall(r"\\x([0-9a-f]{2})", table))
+            self.assertEqual(len(glyphs), size)
+            self.assertEqual(hashlib.sha256(glyphs).hexdigest(), expected)
+
+    def test_extractor_rejects_missing_or_truncated_app0(self):
+        for image in (b"", b"\xff" * 0x20000):
+            with self.assertRaises(ValueError):
+                font_header(image)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@
 #include "vendor_display.h"
 #include "wifi_manager.h"
 #include "frame_receiver.h"
+#include "network_status.h"
+#include "boot_diagnostics.h"
 
 namespace {
 
@@ -28,6 +30,7 @@ GxEPD2_4C<VendorGDEM075F52, 16> display(
 WebServer server(80);
 WiFiServer imageServer(vendor::kImagePort);
 WifiManager wifi;
+BootDiagnostics diagnostics;
 File frameFile;
 uint8_t nativeLine[800 / 4];
 uint8_t blackLine[800 / 8];
@@ -57,7 +60,11 @@ void sendText(int code, const String &text) {
 }
 
 bool mountFilesystem() {
-  if (SPIFFS.begin(false)) return true;
+  Serial.printf("STORAGE mount SPIFFS uptime_ms=%lu\n", static_cast<unsigned long>(millis()));
+  if (SPIFFS.begin(false)) {
+    Serial.println("STORAGE SPIFFS mounted without formatting");
+    return true;
+  }
   // Format only a blank partition, never vendor data or a damaged filesystem.
   const esp_partition_t *partition = esp_partition_find_first(
       ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
@@ -69,7 +76,10 @@ bool mountFilesystem() {
     for (uint8_t value : block)
       if (value != 0xff) return false;
   }
-  return SPIFFS.format() && SPIFFS.begin(false);
+  Serial.println("STORAGE formatting erased SPIFFS partition at 0x290000 (not application flash)");
+  const bool mounted = SPIFFS.format() && SPIFFS.begin(false);
+  Serial.println(mounted ? "STORAGE SPIFFS format/mount complete" : "STORAGE SPIFFS format/mount failed");
+  return mounted;
 }
 
 bool showFrame(bool packedNative) {
@@ -105,30 +115,18 @@ bool showFrame(bool packedNative) {
 
 void showNetworkStatus() {
   const auto &config = wifi.config();
-  Serial.println("E-paper Display WiFi Network Status");
-  display.setFullWindow();
-  display.firstPage();
-  do {
-    display.fillScreen(GxEPD_WHITE);
-    display.setTextColor(GxEPD_BLACK);
-    display.setTextSize(2);
-    display.setCursor(10, 20);
-    display.println(wifi.ready() ? "--WiFi connection successful--"
-                                 : "--WiFi connection failed !!!--");
-    if (!wifi.ready()) display.println("--Please check the WiFi configuration !!!--");
-    display.print("1.WiFi-Name: ");
-    display.println(config.ssid);
-    display.print("2.WiFi-Password: ");
-    display.println(config.password);
-    display.print("3.WiFi-StaticHostNumber: ");
-    display.println(config.host);
-    if (wifi.ready()) {
-      display.print("IP Address: ");
-      display.println(WiFi.localIP());
-    }
-  } while (display.nextPage() && display.epd2.ok());
+  const bool connected = wifi.ready();
+  Serial.printf("DISPLAY status start connected=%u uptime_ms=%lu\n",
+                static_cast<unsigned>(connected), static_cast<unsigned long>(millis()));
+  display.epd2.setPaged();
+  for (uint16_t y = 0; y < 480 && display.epd2.ok(); ++y) {
+    vendor::NetworkStatus::renderRow(config, connected, y, nativeLine);
+    display.epd2.writeNative(nativeLine, nullptr, 0, y, 800, 1);
+  }
+  display.epd2.refresh(false);
   display.epd2.hibernate();
-  if (!display.epd2.ok()) Serial.println(display.epd2.errorText());
+  Serial.printf("DISPLAY status end result=%s uptime_ms=%lu\n",
+                display.epd2.errorText(), static_cast<unsigned long>(millis()));
 }
 
 void handleUpload() {
@@ -163,7 +161,10 @@ void configureRoutes() {
                       String(WiFi.RSSI()) + "\nhost_number=" +
                       String(wifi.config().host) + "\ntcp_port=" +
                       String(vendor::kImagePort) + "\nversion=" + FIRMWARE_VERSION +
-                      "\nframe_bytes=" + String(vendor::kFrameBytes) + "\n");
+                      "\nframe_bytes=" + String(vendor::kFrameBytes) +
+                      "\nuptime_ms=" + String(millis()) +
+                      "\nreset_reason=" + resetReasonName(esp_reset_reason()) +
+                      "\nwifi_attempts=" + String(wifi.attempts()) + "\n");
   });
   for (const char *path : {"/frame", "/frame/native"}) {
     server.on(path, HTTP_POST, [] {
@@ -204,6 +205,7 @@ void handleTcpImage() {
 void setup() {
   Serial.begin(115200);
   Serial.printf("GDP075FW1 %s (%s)\n", FIRMWARE_VERSION, FIRMWARE_GIT_SHA);
+  diagnostics.begin();
   filesystemReady = mountFilesystem();
   if (!filesystemReady) Serial.println("SPIFFS unavailable; frame uploads disabled");
   display.init(115200, true, 10, false);
@@ -213,6 +215,7 @@ void setup() {
 
 void loop() {
   wifi.poll();
+  diagnostics.poll(wifi.ready(), wifi.attempts());
   if (wifi.takeStatusUpdate()) pendingStatus = true;
   if (wifi.ready() && !servicesStarted) {
     server.begin();

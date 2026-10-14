@@ -66,6 +66,10 @@ void WifiManager::begin() {
 }
 
 void WifiManager::startConnection() {
+  ++attempts_;
+  Serial.printf("WIFI attempt=%lu uptime_ms=%lu phase=DHCP\n",
+                static_cast<unsigned long>(attempts_),
+                static_cast<unsigned long>(millis()));
   connected_ = false;
   WiFi.disconnect(false, false);
   if (!WiFi.config(IPAddress(), IPAddress(), IPAddress())) {
@@ -82,7 +86,11 @@ void WifiManager::finishConnection(bool success) {
   connected_ = success;
   phase_ = Phase::Idle;
   lastCheck_ = millis();
-  statusUpdate_ = true;
+  // A full e-paper refresh is expensive. Repeated failures are retries, not
+  // screen changes; keep the first result and genuine state transitions.
+  if (!statusKnown_ || lastStatus_ != success) statusUpdate_ = true;
+  statusKnown_ = true;
+  lastStatus_ = success;
   Serial.println();
   if (success) {
     clearRestartCount();
@@ -133,12 +141,19 @@ void WifiManager::poll() {
         }
         WiFi.begin(config_.ssid, config_.password);
         staticAddress_ = local;
+        Serial.printf("WIFI attempt=%lu uptime_ms=%lu phase=STATIC\n",
+                      static_cast<unsigned long>(attempts_),
+                      static_cast<unsigned long>(millis()));
         phase_ = Phase::Static;
         phaseStarted_ = lastDot_ = now;
       } else {
         finishConnection(true);
       }
     } else if (now - phaseStarted_ >= kConnectTimeout) {
+      Serial.printf("WIFI timeout phase=%s status=%d uptime_ms=%lu\n",
+                    phase_ == Phase::Dhcp ? "DHCP" : "STATIC",
+                    static_cast<int>(WiFi.status()),
+                    static_cast<unsigned long>(now));
       finishConnection(false);
     } else if (now - lastDot_ >= 1000) {
       Serial.print('.');
@@ -196,10 +211,25 @@ void WifiManager::applyConfig(const vendor::WifiConfig &config) {
 }
 
 void WifiManager::pollSerial() {
-  if (serialBytes_ && millis() - serialLastByte_ >= kSerialTimeout) {
+  // Do not discard a fragmented packet whose continuation queued while the
+  // panel was busy. UART availability does not give us byte arrival times.
+  if (serialBytes_ && !Serial.available() &&
+      millis() - serialLastByte_ >= kSerialTimeout) {
+    bool lineEnding = serialBytes_ <= 2;
+    for (size_t i = 0; lineEnding && i < serialBytes_; ++i)
+      lineEnding = serialBuffer_[i] == '\r' || serialBuffer_[i] == '\n';
+    if (lineEnding) {
+      Serial.println("UART: ignored standalone line ending");
+    } else {
+      Serial.println("Error: Invalid data length!");
+      Serial.printf("UART timeout mode=%s received=%u expected=%s overflow=%u\n",
+                    serialBuffer_[0] == 'W' ? "text" : "binary",
+                    static_cast<unsigned>(serialBytes_),
+                    serialBuffer_[0] == 'W' ? "newline" : "64",
+                    static_cast<unsigned>(serialOverflow_));
+    }
     serialBytes_ = 0;
     serialOverflow_ = false;
-    Serial.println("Error: Invalid data length!");
   }
   while (Serial.available()) {
     const uint8_t value = Serial.read();
@@ -224,6 +254,10 @@ void WifiManager::pollSerial() {
       vendor::WifiConfig candidate;
       const auto result = vendor::decodePacket(serialBuffer_, serialBytes_, candidate);
       serialBytes_ = 0;
+      if (result != vendor::DecodeResult::Ok)
+        Serial.printf("UART rejected received=64 reason=%s\n",
+                      result == vendor::DecodeResult::InvalidEndMarker ? "end_marker" :
+                      result == vendor::DecodeResult::InvalidHost ? "host" : "length_fields");
       if (result == vendor::DecodeResult::Ok)
         applyConfig(candidate);
       else if (result == vendor::DecodeResult::InvalidEndMarker)

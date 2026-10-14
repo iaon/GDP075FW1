@@ -104,3 +104,62 @@ A complete aligned image scan found another checksum/hash-valid ESP32 image:
 ESP-AT at 0x100000..0x24ff50. Current app1 begins inside that image, explaining
 its missing ESP header; the historical reason for retaining it remains unknown.
 No physical-board test or vendor-application capture has been performed.
+
+## Follow-up to first hardware report: status/retry diagnostics
+
+The user reported different fonts/colours, repeated flashing of the panel,
+Wi-Fi failures, UART length errors and changed runtime flash bytes. Compared
+the supplied readback to the flashed factory artifact: bootloader, partition
+table and code regions are identical and image checksums remain valid. The
+2,250 NVS changes and SPIFFS metadata (1,471 changed bytes in 368 sectors)
+do not demonstrate damaged executable code. Every SPIFFS sector matches the
+SDK's magic-length formula and zero erase counter, with no allocated files.
+
+Reproduced repeated full display-update requests on failed Wi-Fi retries with
+zero mock ESP restarts. Fixed by publishing only the first connection result
+and success/failure transitions. Added BOOT reset reason, ALIVE uptime/attempt
+reports, display operation boundaries and storage mount/format diagnostics;
+these diagnostics do not add NVS writes. UART timeout errors now include mode
+and byte count without contents. Lone terminal line endings are ignored after
+the idle timeout, while valid binary lengths 10/13 and buffered continuations
+during long panel updates remain supported.
+
+Recovered exact Font20/Font24 tables, text coordinates, Paint colour semantics
+and failure inversion from original app0. Status streams native packed rows
+with 200 bytes of scratch storage; it no longer uses Adafruit text. Font data
+are reproducible/verified with scripts/vendor_fonts.py, and unsupported bytes
+are safely substituted. The original and readback dumps are preserved and
+ignored by Git.
+
+Expanded verification includes six C++ suites with ASan/UBSan and seven Python
+tests, including retry refresh suppression, reboot diagnostics without NVS
+writes, UART lengths/timeout, font hashes, full-frame reference Paint output
+and actual native-driver transfer. No attached board was flashed here; actual
+reset cause and physical panel output still require the user's UART/capture.
+
+## User-confirmed operation and Linux workflow
+
+The user subsequently reported stable operation and a status picture similar
+to the original. Their UART capture showed ALIVE uptimes increasing through
+91,115 ms, with Wi-Fi attempt 2 and no additional boot marker. The first status
+refresh ended with result=ok after 22,175 ms; the next failure did not redraw.
+WL_NO_SSID_AVAIL (status=1) was explained as an unavailable station network.
+
+The user successfully provisioned their own Wi-Fi. Documented miniterm local
+echo, LF endings and the current two-second inter-byte timeout, including the
+recommendation to paste a complete WIFI line and press Enter immediately.
+The firmware deliberately saves credentials and restarts after a countdown.
+No private credentials were added to documentation.
+
+The user confirmed the Linux picture conversion/upload workflow works. README
+now contains the complete Pillow example with EXIF orientation, white alpha
+compositing, clockwise rotation before aspect-preserving 800x480 fitting,
+four-colour dithering and native packing to 96,000 bytes. It includes the
+same-interpreter Pillow installation fix, HTTP upload with explicit completion
+and the TCP alternative. Personal picture.jpg and generated frame.native are
+kept locally and excluded from Git, like flash dumps and build artifacts.
+
+Hardware claims are explicitly user-reported and limited to the tested board
+and workflow; ImageToWiFi interoperability and fault/long-duration scenarios
+remain unverified. This follow-up documents the existing firmware behaviour
+without changing the UART timeout or automatically accessing the board.

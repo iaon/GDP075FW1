@@ -10,6 +10,9 @@ dist/
 __pycache__/
 *.py[cod]
 /GDP075FW1-backup.bin
+/gdp075fw1-readback.bin
+/frame.native
+/picture.jpg
 /.aws/
 /.agents/
 /.codex/

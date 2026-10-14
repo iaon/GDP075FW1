@@ -79,6 +79,9 @@ Factory credentials below are application literals, not private NVS values.
 | `0x400d5334`, `0x400d53b4` | Preferences setter/getter use signed I32 NVS type `0x14`, including host and restart count |
 | `0x400d3030`, `0x400d30ac` | Approximately 30-second Wi-Fi checks/reconnection, status display and TCP image reception |
 | `0x400d2718`, `0x400d27dc` | Success/failure screens with SSID, password and static host number |
+| `0x3ffbdb7c`, `0x3ffbdb84` | Font descriptors: 14×20 at `0x3f400470`, 17×24 at `0x3f401348` |
+| `0x400d3500`, `0x400d35c0`, `0x400d3634` | Glyph bits, text wrapping/colour argument order, number-to-text colour swap |
+| `0x400d2654`, `0x400d2684` | 48,000-byte upper-half transfer; success pads `0x55`, failure XORs upper bytes and pads `0xaa` |
 | `0x400d2568` | Panel reset and controller initialization commands |
 | `0x400d26d0`, `0x400d26f4` | SPI command/data writes: CS=27, DC=14; other GPIO calls confirm RESET=12, BUSY=13 |
 
@@ -151,6 +154,7 @@ Confirmed from the dump:
 - factory Wi-Fi defaults, static-host addressing and signed NVS key types;
 - 64-byte UART packet and TCP port 8000 native-image receive loop;
 - panel GPIO calls, SPI clock, reset and controller command sequence.
+- original ASCII fonts, status text positions, wrapping and colour transfer.
 
 Confirmed from matching device documentation:
 
@@ -163,12 +167,54 @@ Implemented with deliberate differences from the vendor:
 - HTTP endpoints alongside the recovered TCP receiver;
 - SPIFFS staging rather than direct TCP-to-display streaming;
 - strict complete-frame checks and bounded receive/BUSY timeouts;
-- paged GxEPD2 text drawing: exact vendor fonts and screen layout are not
-  reproduced.
+- suppressing repeated full status refreshes on identical Wi-Fi results;
+- safe `?` substitution for bytes outside the original ASCII font range;
+- boot reason/uptime/retry logging and tolerant standalone terminal endings.
 
-Still unverified on hardware: ImageToWiFi interoperability, physical panel
-operation and board revision. The additional ESP-AT image is identified, but
-the purpose of retaining it is unverified.
+The status screen no longer uses the initial replacement's Adafruit font.
+`src/vendor_fonts.h` contains the exact 3,800- and 6,840-byte app0 glyph tables;
+`scripts/vendor_fonts.py` verifies their initialized-data descriptors and
+reproduces the source header without reading NVS. Labels use Font20 at
+`(10,85)`, `(10,115)` and `(10,145)`; values use Font24 at `(180,80)`,
+`(240,110)` and `(360,140)`. Success text starts at `(10,40)`; failure texts
+start at `(10,20)` and `(10,40)`. In the pre-inversion upper canvas, labels
+are black on white and values are white on red cells. Failure transfer flips
+all two-bit colour indices in that upper canvas and fills the lower half
+yellow. These choices come from the executable Paint calls, not visual guesses.
+
+## First replacement readback (2026-10-14)
+
+Compared the supplied `gdp075fw1-readback.bin` (SHA-256
+`fd655fe64b68ac7ed19e45c12834ff375d52031268f24241ecd7ba994652703b`) against
+the then-flashed factory artifact, not against the later corrected build.
+Bootloader, partition table, OTA metadata and both application regions had
+zero changed bytes. App0's compact SHA-256 was
+`036bdda0db8a4d0d5294c04cf85ea08d8236074eed9cfa728d9cf2405244d6fe`;
+its ESP XOR checksum and appended SHA-256 remained valid.
+
+NVS changed by 2,250 bytes; no private values were disclosed. SPIFFS changed
+by 1,471 bytes: 367 sectors differed by four bytes and one by three bytes
+(one metadata byte remained `0xff`). All 368 sectors have a two-byte magic
+at sector offset `0xfc` and a zero two-byte erase counter at `0xfe`; all
+other bytes remain erased. The magic equals the low 16 bits of
+`0x529 XOR 256 XOR (368 - sector_index)`, matching the actual SDK
+`spiffs_erase_block` instructions and enabled magic-length configuration.
+This is an empty formatted SPIFFS partition, not overwritten program code.
+
+The Wi-Fi manager previously unconditionally requested a display update on
+each failed retry. Host reproduction at uptimes 30,000, 90,000 and 150,000 ms
+requested three full refreshes with zero ESP restarts. A lone terminal LF
+also produced `Invalid data length!` through the UART timeout path. These
+reproductions explain the symptoms without establishing whether the physical
+board additionally resets; a boot-to-boot UART capture is still required.
+
+The user subsequently confirmed stable operation, a similar-looking status
+screen, Wi-Fi provisioning and Linux picture upload on their board. The UART
+excerpt showed increasing uptime across repeated Wi-Fi failures, a successful
+22,175 ms status refresh, and no second refresh on an identical failure.
+Still unverified on hardware: ImageToWiFi interoperability, other board
+revisions, fault recovery and long-duration behaviour. The additional ESP-AT
+image is identified, but its historical purpose remains unverified.
 This is a targeted reconstruction of recovered paths, not a claim that every
 function or asset in the original firmware has been decompiled.
 

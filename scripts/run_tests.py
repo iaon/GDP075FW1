@@ -14,6 +14,8 @@ TARGETS = {
     "display": ["tests/vendor_display_test.cpp", "tests/test_runtime.cpp"],
     "wifi": ["tests/wifi_manager_test.cpp", "tests/test_runtime.cpp", "src/wifi_manager.cpp"],
     "frames": ["tests/frame_receiver_test.cpp"],
+    "status": ["tests/network_status_test.cpp", "tests/test_runtime.cpp"],
+    "boot": ["tests/boot_diagnostics_test.cpp", "tests/test_runtime.cpp"],
 }
 
 def main():

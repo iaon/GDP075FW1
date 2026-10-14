@@ -11,6 +11,7 @@ class WifiManager {
   bool ready() const { return phase_ == Phase::Idle && connected_; }
   const vendor::WifiConfig &config() const { return config_; }
   bool takeStatusUpdate();
+  uint32_t attempts() const { return attempts_; }
 
  private:
   enum class Phase { Idle, Dhcp, Static };
@@ -29,6 +30,9 @@ class WifiManager {
   uint32_t lastDot_ = 0;
   bool connected_ = false;
   bool statusUpdate_ = false;
+  bool statusKnown_ = false;
+  bool lastStatus_ = false;
+  uint32_t attempts_ = 0;
   IPAddress staticAddress_;
   uint8_t serialBuffer_[256] = {};
   size_t serialBytes_ = 0;
