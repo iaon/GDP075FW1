@@ -71,11 +71,12 @@ including HTTP status 500; a new frame can retry after the fault clears.
 
 ## Build
 
-Use a project-local PlatformIO Core 6 environment, as in `sd-app0-arduino`:
+Use the pinned PlatformIO Core version in `requirements-build.txt`, with a
+project-local environment as in `sd-app0-arduino`:
 
 ```sh
 python3 -m venv .venv
-./.venv/bin/pip install "platformio==6.2.0"
+./.venv/bin/pip install -r requirements-build.txt
 chmod +x scripts/pio.sh
 scripts/pio.sh
 ```
@@ -126,6 +127,25 @@ does not target ESP32-S3.
 The display dependencies are pinned to GxEPD2 1.6.9, Adafruit GFX 1.12.6 and
 Adafruit BusIO 1.17.4 so a later library release does not silently change the
 controller implementation.
+
+## Dependency updates
+
+[Dependabot](.github/dependabot.yml) checks GitHub Actions and the Python
+build-tool manifest `requirements-build.txt` weekly on Mondays at 09:00
+Europe/Moscow. Action updates are grouped into one pull request; each
+ecosystem is limited to five open update pull requests. Updates require
+review and are not automatically merged.
+
+The CI and local setup both install PlatformIO Core from the same manifest.
+Changing it triggers the firmware tests/build in CI, including Dependabot
+pull requests. No secrets are required to test/build pull requests; only
+tagged push builds publish releases.
+
+Dependabot does not currently support the PlatformIO package ecosystem, so
+the platform and libraries pinned in `platformio.ini` (espressif32, GxEPD2,
+Adafruit GFX/BusIO) still need manual updates and hardware verification.
+Optional picture-conversion/UART tools installed into another environment
+(Pillow/pyserial in the Linux examples) are not part of the build manifest.
 
 ## Checks without a board
 

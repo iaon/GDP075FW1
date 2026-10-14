@@ -1,0 +1,2 @@
+# PlatformIO Core used by local builds and GitHub Actions.
+platformio==6.2.0

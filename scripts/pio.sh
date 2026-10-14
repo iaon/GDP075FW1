@@ -6,7 +6,7 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pio="$project_dir/.venv/bin/pio"
 
 if [[ ! -x "$pio" ]]; then
-    echo "PlatformIO is not installed. Run: python3 -m venv .venv && .venv/bin/pip install 'platformio==6.2.0'" >&2
+    echo "PlatformIO is not installed. From the project directory run: python3 -m venv .venv && .venv/bin/pip install -r requirements-build.txt" >&2
     exit 1
 fi
 
