@@ -170,6 +170,8 @@ Implemented with deliberate differences from the vendor:
 - suppressing repeated full status refreshes on identical Wi-Fi results;
 - safe `?` substitution for bytes outside the original ASCII font range;
 - boot reason/uptime/retry logging and tolerant standalone terminal endings.
+- deferred SPIFFS mounting on upload and read-only legacy restart diagnostics
+  instead of vendor-style startup/reconnect writes.
 
 The status screen no longer uses the initial replacement's Adafruit font.
 `src/vendor_fonts.h` contains the exact 3,800- and 6,840-byte app0 glyph tables;
@@ -200,6 +202,16 @@ other bytes remain erased. The magic equals the low 16 bits of
 `0x529 XOR 256 XOR (368 - sector_index)`, matching the actual SDK
 `spiffs_erase_block` instructions and enabled magic-length configuration.
 This is an empty formatted SPIFFS partition, not overwritten program code.
+
+The current build no longer formats SPIFFS merely by booting: mounting is
+deferred until an image upload. It also does not create or clear the legacy
+restart_counter namespace on startup/reconnection. SDK NVS initialization and
+conditional PHY calibration storage remain enabled to preserve normal Wi-Fi
+operation and persistence. An initialized readback is therefore different
+from the erased-data factory image but can normally reuse its calibration on
+the same chip; proving byte-for-byte stability requires consecutive physical
+readbacks with no provisioning/upload between them. scripts/verify_readback.py
+provides strict full-flash and separately scoped immutable-code comparisons.
 
 The Wi-Fi manager previously unconditionally requested a display update on
 each failed retry. Host reproduction at uptimes 30,000, 90,000 and 150,000 ms

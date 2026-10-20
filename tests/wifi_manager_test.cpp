@@ -35,7 +35,8 @@ int main() {
   assert(uint32_t(WiFi.configurations.front().local) == 0);
   connect(defaults);
   assert(defaults.takeStatusUpdate() && !defaults.takeStatusUpdate());
-  assert(testnvs::namespaces["restart_counter"]["count"].integer == 0);
+  assert(testnvs::namespaces.empty());
+  assert(!testnvs::writableOpens && !testnvs::writes);
 
   // Drop and restore a connection through SDK auto-reconnect.
   WiFi.statusValue = WL_IDLE_STATUS;
@@ -51,6 +52,8 @@ int main() {
   defaults.poll();
   assert(!defaults.ready() && WiFi.begins == beginCalls + 1);
   connect(defaults);
+  assert(testnvs::namespaces.empty());
+  assert(!testnvs::writableOpens && !testnvs::writes);
 
   testhw::reset();
   save("Saved SSID", "Saved password", 77);
@@ -131,8 +134,10 @@ int main() {
   assert(testnvs::namespaces["wifi_config"]["password"].text.empty());
   assert(testnvs::namespaces["wifi_config"]["host_number"].type == testnvs::Value::I32);
   assert(testnvs::namespaces["wifi_config"]["host_number"].integer == 93);
+  assert(testnvs::writableOpens == 1 && testnvs::writes == 3);
   WifiManager reboot; reboot.begin();
   assert(reboot.config().host == 93 && reboot.config().password[0] == 0);
+  assert(testnvs::writableOpens == 1 && testnvs::writes == 3);
 
   testhw::reset(); WifiManager fragmented; fragmented.begin();
   std::vector<uint8_t> packet(64, 0);
@@ -191,6 +196,11 @@ int main() {
   WifiManager counter; counter.begin();
   assert(testnvs::namespaces["restart_counter"]["count"].integer == 7);
   connect(counter);
-  assert(testnvs::namespaces["restart_counter"]["count"].integer == 0);
+  assert(testnvs::namespaces["restart_counter"]["count"].integer == 7);
+  assert(!testnvs::writableOpens && !testnvs::writes);
+  fakeResetReason = ESP_RST_POWERON;
+  WifiManager powerOn; powerOn.begin(); connect(powerOn);
+  assert(testnvs::namespaces["restart_counter"]["count"].integer == 7);
+  assert(!testnvs::writableOpens && !testnvs::writes);
   puts("Wi-Fi DHCP/static, reconnect, serial, saved NVS and failure tests passed");
 }

@@ -21,7 +21,6 @@ class WifiManager {
   void pollSerial();
   void applyConfig(const vendor::WifiConfig &config);
   void loadRestartCount();
-  void clearRestartCount();
 
   vendor::WifiConfig config_;
   Phase phase_ = Phase::Idle;

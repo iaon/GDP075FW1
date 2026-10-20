@@ -16,6 +16,7 @@ TARGETS = {
     "frames": ["tests/frame_receiver_test.cpp"],
     "status": ["tests/network_status_test.cpp", "tests/test_runtime.cpp"],
     "boot": ["tests/boot_diagnostics_test.cpp", "tests/test_runtime.cpp"],
+    "storage": ["tests/deferred_mount_test.cpp"],
 }
 
 def main():

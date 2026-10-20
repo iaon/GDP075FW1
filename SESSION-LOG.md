@@ -174,3 +174,29 @@ addresses, checksum verification and hardware verification limits. The release
 workflow includes flash/data-preservation instructions in its generated notes.
 Flash dumps, locally generated images and personal pictures remain excluded
 from Git and from release assets.
+
+## Startup flash-write reduction and readback verification
+
+The user again observed full-image verify-flash failing after an automatic
+reset and asked whether an initialized readback would preserve calibration.
+Explained the distinction between a vendor device snapshot and the rebuilt
+factory's erased NVS/SPIFFS. Inspected the current Arduino core: nvs_flash_init
+runs before setup; Wi-Fi/PHY calibration storage is enabled in the SDK.
+Espressif's PHY implementation stores calibration on missing/invalid data,
+not on every normal startup with valid calibration. Reusing a same-chip dump
+can preserve calibration but is not a permanent no-write guarantee.
+
+Removed application-created restart-counter namespace/reset writes at boot
+and reconnect. Legacy count reads remain read-only. Deferred SPIFFS mounting
+and blank-partition formatting to explicit image uploads, preserving the
+guard against erasing nonblank/foreign storage. Added mock NVS write counters
+and deferred-mount tests covering zero boot writes, retries and one-time mount.
+
+Added scripts/verify_readback.py: verifies the known partition layout/reference
+ESP checksums, compares every immutable byte, reports writable-region byte
+counts without contents, and offers --strict for all 4 MiB. Tests inject
+changes at protected/runtime boundaries, malformed reference/table hashes
+and truncated reads. README documents no-reset verification, post-boot code
+comparison, consecutive-snapshot stability tests and private same-chip backups.
+No physical board was accessed or flashed by this work; persistent SDK writes
+and actual repeat-startup behaviour still require the user's readback tests.

@@ -9,13 +9,17 @@ struct Value {
 };
 extern std::map<std::string, std::map<std::string, Value>> namespaces;
 extern std::string failOpen, failWrite;
+extern unsigned writableOpens, writes;
 }
 class Preferences {
  public:
   bool begin(const char *name, bool readOnly = false) {
     if (testnvs::failOpen == name || (readOnly && !testnvs::namespaces.count(name))) return false;
     name_ = name; readOnly_ = readOnly; started_ = true;
-    if (!readOnly) testnvs::namespaces[name_];
+    if (!readOnly) {
+      ++testnvs::writableOpens;
+      testnvs::namespaces[name_];
+    }
     return true;
   }
   void end() { started_ = false; }
@@ -34,11 +38,13 @@ class Preferences {
   }
   size_t putString(const char *key, const char *text) {
     if (!writable(key)) return 0;
+    ++testnvs::writes;
     testnvs::namespaces[name_][key] = {testnvs::Value::Text, text, 0};
     return strlen(text);
   }
   size_t putInt(const char *key, int32_t value) {
     if (!writable(key)) return 0;
+    ++testnvs::writes;
     testnvs::namespaces[name_][key] = {testnvs::Value::I32, "", value};
     return 4;
   }

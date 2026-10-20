@@ -12,6 +12,7 @@ from check_release import validate_image
 from device import provisioning_packet
 from scan_images import scan
 from vendor_fonts import font_header
+from verify_readback import compare, LAYOUT
 
 
 def esp_image():
@@ -87,6 +88,48 @@ class FontChecks(unittest.TestCase):
         for image in (b"", b"\xff" * 0x20000):
             with self.assertRaises(ValueError):
                 font_header(image)
+
+
+def full_flash():
+    image = bytearray(b"\xff" * 0x400000)
+    app = esp_image()
+    image[0x1000:0x1000 + len(app)] = app
+    image[0x10000:0x10000 + len(app)] = app
+    entries = b"".join(struct.pack("<HBBII16sI", 0x50aa, typ, sub, start, size,
+                                  name.encode().ljust(16, b"\0"), 0)
+                       for name, typ, sub, start, size, _ in LAYOUT)
+    table = entries + b"\xeb\xeb" + b"\xff" * 14 + hashlib.md5(entries).digest()
+    image[0x8000:0x8000 + len(table)] = table
+    return bytes(image)
+
+
+class ReadbackChecks(unittest.TestCase):
+    def test_identical_and_only_mutable_changes(self):
+        reference = full_flash()
+        self.assertTrue(compare(reference, reference, strict=True)[0])
+        readback = bytearray(reference)
+        for offset in (0x9000, 0xdfff, 0xe000, 0xffff, 0x2900fc, 0x3fffff):
+            readback[offset] ^= 1
+        matches, regions = compare(reference, readback)
+        self.assertTrue(matches)
+        self.assertEqual(sum(item[3] for item in regions), 6)
+        self.assertFalse(compare(reference, readback, strict=True)[0])
+
+    def test_code_padding_partitions_and_inactive_ota_changes_fail(self):
+        reference = full_flash()
+        for offset in (0, 0xfff, 0x1000, 0x7fff, 0x8000, 0x8fff,
+                       0x10000, 0x14ffff, 0x150000, 0x28ffff):
+            readback = bytearray(reference); readback[offset] ^= 1
+            self.assertFalse(compare(reference, readback)[0], hex(offset))
+
+    def test_bad_reference_or_incomplete_dump_is_not_accepted(self):
+        reference = full_flash()
+        with self.assertRaises(ValueError):
+            compare(reference, reference[:-1])
+        for offset in (0x1000, 0x8000, 0x80bf, 0x10000):
+            invalid = bytearray(reference); invalid[offset] ^= 1
+            with self.assertRaises(ValueError):
+                compare(invalid, reference)
 
 
 if __name__ == "__main__":

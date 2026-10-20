@@ -39,21 +39,16 @@ void WifiManager::loadConfig() {
 
 void WifiManager::loadRestartCount() {
   Preferences preferences;
-  if (!preferences.begin("restart_counter", false)) return;
-  // The vendor code clears count on power-on, reads it on other resets, and
-  // clears it after a successful connection. No increment was recovered.
-  if (esp_reset_reason() == ESP_RST_POWERON) preferences.putInt("count", 0);
-  const int32_t count = preferences.getInt("count", 0);
-  preferences.end();
-  Serial.printf("Software restart count:\n%ld\n", static_cast<long>(count));
-}
-
-void WifiManager::clearRestartCount() {
-  Preferences preferences;
-  if (preferences.begin("restart_counter", false)) {
-    preferences.putInt("count", 0);
+  int32_t count = 0;
+  // This legacy diagnostic was never incremented by the recovered code.
+  // Preserve its power-on display value without creating a namespace or
+  // resetting persistent data on every boot/reconnection.
+  if (esp_reset_reason() != ESP_RST_POWERON &&
+      preferences.begin("restart_counter", true)) {
+    count = preferences.getInt("count", 0);
     preferences.end();
   }
+  Serial.printf("Software restart count:\n%ld\n", static_cast<long>(count));
 }
 
 void WifiManager::begin() {
@@ -93,7 +88,6 @@ void WifiManager::finishConnection(bool success) {
   lastStatus_ = success;
   Serial.println();
   if (success) {
-    clearRestartCount();
     Serial.println("WiFi Connected");
     Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
     Serial.println("--WiFi connection successful--");

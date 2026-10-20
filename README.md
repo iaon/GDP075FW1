@@ -50,12 +50,17 @@ accepts two 48,000-byte bitplanes (black/white first, chromatic second). That
 legacy format provides black, white and red; it is not the vendor's native
 four-colour format and cannot represent yellow.
 
-SPIFFS is automatically formatted only when its entire partition is erased
-(`0xff`), so an application update does not silently erase vendor files.
-Its first format writes four metadata bytes per 4 KiB sector. NVS is also
-initialized and updated at runtime. Consequently, comparing the entire flash
-against a factory image after boot is not a code-integrity check; compare the
-bootloader and application separately.
+SPIFFS is mounted lazily on the first image upload, never at boot or during
+status drawing. It is automatically formatted only when its entire partition
+is erased (`0xff`), so an application update does not silently erase vendor
+files. Its first format writes four metadata bytes per 4 KiB sector, and
+uploads write their staging file there. Boot/reconnect diagnostics no longer
+create or reset `restart_counter` in NVS; its legacy value is read only.
+
+Arduino/ESP-IDF still initializes NVS and Wi-Fi stores device-specific radio
+calibration when needed. Consequently, comparing the entire flash against an
+erased-data factory image after boot is not a code-integrity check. See
+[Flash verification and personal backups](#flash-verification-and-personal-backups).
 
 The status screen is refreshed for its first result and changes between
 connection success/failure, not for every failed retry. Factory Font20 (14×20)
@@ -403,6 +408,88 @@ only the application to preserve NVS and SPIFFS:
 The full `gdp075fw1-factory-rebuilt.bin` is written at `0x0`, but overwrites
 all 4 MiB, including configuration and files. It will restore the default
 station credentials and require a first-time SPIFFS format again.
+
+## Flash verification and personal backups
+
+A factory image deliberately has erased NVS/SPIFFS; the vendor backup is a
+snapshot of an already initialized device. After every complete factory
+flash, Wi-Fi may recreate NVS radio-calibration data. This changes the full
+flash digest without changing executable firmware. Restoring an initialized
+personal dump to the same board generally reuses those calibration data.
+This is not a guarantee of permanent full-flash immutability: provisioning,
+uploads, SDK recovery and invalid/incompatible calibration can legitimately
+write runtime data. Radio calibration is not display calibration.
+
+The current firmware preserves calibration, Wi-Fi configuration and staging
+data rather than disabling persistence just to make a full digest match.
+It performs no application-level NVS writes on boot/reconnection and does
+not mount/format SPIFFS until an explicit upload. The Arduino core performs
+its own NVS initialization before `setup()`. The SDK's radio calibration
+policy is documented in [Espressif's RF calibration guide](https://docs.espressif.com/projects/esp-idf/en/v4.4.2/esp32/api-guides/RF_calibration.html).
+
+### Exact verification before first boot
+
+For esptool 5.x, prevent the automatic reset that otherwise runs the firmware
+between writing and verifying. Close miniterm first:
+
+```sh
+~/esptool-env/bin/esptool --chip esp32 --port /dev/ttyUSB0 --baud 115200 \
+  --after no-reset write-flash 0x0 gdp075fw1-factory-rebuilt.bin
+~/esptool-env/bin/esptool --chip esp32 --port /dev/ttyUSB0 \
+  --before no-reset --after no-reset verify-flash 0x0 gdp075fw1-factory-rebuilt.bin
+```
+
+Only reset/power-cycle the board after verification. Do not do a factory flash
+merely to recheck an already configured device: it erases settings and
+calibration again. The `Hash of data verified` message at write time already
+checks the just-written bytes before the final reset.
+
+### Code verification after boot
+
+Read the complete flash and compare it with the exact full image flashed to
+that board (not another build or an earlier release):
+
+```sh
+~/esptool-env/bin/esptool --chip esp32 --port /dev/ttyUSB0 --baud 115200 \
+  read-flash 0x0 0x400000 gdp075fw1-readback.bin
+python3 scripts/verify_readback.py \
+  gdp075fw1-factory-rebuilt.bin gdp075fw1-readback.bin
+```
+
+The checker requires the known partition layout and a checksum/hash-valid
+reference. It compares the bootloader, partition table, reserved bytes and
+both complete application regions, including padding/inactive OTA storage.
+It reports NVS/OTA metadata/SPIFFS differences separately without printing
+their contents. These writable regions are **not validated** by the code
+check; a successful result does not prove that all runtime data are healthy.
+Unexpected changes outside them cause a nonzero exit status.
+
+Add `--strict` to require all 4 MiB to match, including runtime data.
+The checker reads files only; it never accesses, flashes or resets a board.
+
+### Check that initialization writes stop
+
+After provisioning and first initialization, let the board finish any display
+operation. With no new configuration commands or image uploads, capture two
+snapshots separated by another complete startup:
+
+```sh
+~/esptool-env/bin/esptool --chip esp32 --port /dev/ttyUSB0 --baud 115200 \
+  read-flash 0x0 0x400000 gdp075fw1-snapshot-before.bin
+# The read command resets the device afterward. Wait for startup/display
+# completion before taking the second snapshot, without uploading a frame.
+~/esptool-env/bin/esptool --chip esp32 --port /dev/ttyUSB0 --baud 115200 \
+  read-flash 0x0 0x400000 gdp075fw1-snapshot-after.bin
+python3 scripts/verify_readback.py --strict \
+  gdp075fw1-snapshot-before.bin gdp075fw1-snapshot-after.bin
+```
+
+`FULL FLASH MATCH` demonstrates stability over that tested restart. If it
+differs, rerun without `--strict` to locate the changed region by byte count.
+Capturing/restoring data does not itself disable future writes. A saved full
+dump can be used as a personalized backup for the same ESP32/compatible PHY
+library; do not distribute it as a generic factory image. It may contain
+Wi-Fi passwords and uploaded pictures. Keep it private and outside Git.
 
 ## Reproduce the binary analysis
 

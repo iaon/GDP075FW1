@@ -14,6 +14,7 @@ namespace trace { std::vector<Command> commands; }
 namespace testnvs {
 std::map<std::string, std::map<std::string, Value>> namespaces;
 std::string failOpen, failWrite;
+unsigned writableOpens = 0, writes = 0;
 }
 namespace testhw {
 uint64_t clockMs = 0;
@@ -27,6 +28,7 @@ void reset() {
   busyStuck = false; stuckOnCommand = -1; yields = 0; events.clear();
   trace::commands.clear(); Serial = FakeSerial(); ESP = FakeEsp(); WiFi = FakeWiFi();
   testnvs::namespaces.clear(); testnvs::failOpen.clear(); testnvs::failWrite.clear();
+  testnvs::writableOpens = testnvs::writes = 0;
   fakeResetReason = ESP_RST_POWERON;
 }
 }

@@ -12,6 +12,7 @@
 #include "frame_receiver.h"
 #include "network_status.h"
 #include "boot_diagnostics.h"
+#include "deferred_mount.h"
 
 namespace {
 
@@ -35,14 +36,15 @@ File frameFile;
 uint8_t nativeLine[800 / 4];
 uint8_t blackLine[800 / 8];
 uint8_t chromaticLine[800 / 8];
-bool filesystemReady = false;
+bool mountFilesystem();
+DeferredMount filesystem(mountFilesystem);
 bool servicesStarted = false;
 bool pendingStatus = false;
 bool httpRejected = false;
 class StagingStorage : public FrameStorage {
  public:
   bool open() override {
-    if (!filesystemReady) return false;
+    if (!filesystem.ensureReady()) return false;
     frameFile = SPIFFS.open(kFramePath, FILE_WRITE);
     return bool(frameFile);
   }
@@ -206,8 +208,7 @@ void setup() {
   Serial.begin(115200);
   Serial.printf("GDP075FW1 %s (%s)\n", FIRMWARE_VERSION, FIRMWARE_GIT_SHA);
   diagnostics.begin();
-  filesystemReady = mountFilesystem();
-  if (!filesystemReady) Serial.println("SPIFFS unavailable; frame uploads disabled");
+  Serial.println("STORAGE SPIFFS deferred until image upload; no filesystem writes at boot");
   display.init(115200, true, 10, false);
   configureRoutes();
   wifi.begin();

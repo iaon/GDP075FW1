@@ -11,6 +11,9 @@ __pycache__/
 *.py[cod]
 /GDP075FW1-backup.bin
 /gdp075fw1-readback.bin
+/gdp075fw1-personal-backup.bin
+/gdp075fw1-snapshot-before.bin
+/gdp075fw1-snapshot-after.bin
 /frame.native
 /picture.jpg
 /.aws/
