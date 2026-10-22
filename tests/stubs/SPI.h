@@ -16,9 +16,11 @@ class SPIClass {
   }
   void endTransaction() { testhw::events.push_back({testhw::Event::End, -1, 0}); }
   uint8_t transfer(uint8_t value) {
+    testhw::clockMs += testhw::spiByteMs;
     testhw::events.push_back({testhw::Event::Byte, -1, value});
     if (testhw::pins[14] == LOW) {
       trace::commands.push_back({value, {}});
+      testhw::busyUntilMs = testhw::clockMs + testhw::commandBusyMs[value];
       if (value == testhw::stuckOnCommand) testhw::busyStuck = true;
     } else {
       trace::commands.back().data.push_back(value);

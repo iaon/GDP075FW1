@@ -6,6 +6,7 @@
 #include <string.h>
 #include <deque>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 constexpr int LOW = 0, HIGH = 1, MSBFIRST = 1, SPI_MODE0 = 0;
@@ -14,10 +15,19 @@ class String {
  public:
   String(const char *text = "") : value(text) {}
   String(const std::string &text) : value(text) {}
+  template <typename Number,
+            typename std::enable_if<std::is_arithmetic<Number>::value, int>::type = 0>
+  String(Number number) : value(std::to_string(number)) {}
   bool isEmpty() const { return value.empty(); }
   size_t length() const { return value.size(); }
   const char *c_str() const { return value.c_str(); }
   bool operator==(const char *text) const { return value == text; }
+  bool operator==(const String &other) const { return value == other.value; }
+  bool operator!=(const char *text) const { return value != text; }
+  String &operator+=(const String &other) { value += other.value; return *this; }
+  friend String operator+(const String &a, const String &b) {
+    return String(a.value + b.value);
+  }
   void toCharArray(char *out, size_t size) const { snprintf(out, size, "%s", c_str()); }
   std::string value;
 };
@@ -27,6 +37,8 @@ extern uint64_t clockMs;
 extern int pins[40];
 extern bool busyStuck;
 extern int stuckOnCommand;
+extern uint32_t commandBusyMs[256], spiByteMs;
+extern uint64_t busyUntilMs;
 extern unsigned yields;
 extern std::vector<Event> events;
 void reset();
@@ -35,7 +47,8 @@ inline uint32_t millis() { return uint32_t(testhw::clockMs); }
 inline void delay(unsigned ms) { testhw::clockMs += ms; }
 inline void yield() { ++testhw::yields; }
 inline int digitalRead(int pin) {
-  return pin == 13 && testhw::busyStuck ? LOW : testhw::pins[pin];
+  return pin == 13 && (testhw::busyStuck || testhw::clockMs < testhw::busyUntilMs)
+             ? LOW : testhw::pins[pin];
 }
 inline void digitalWrite(int pin, int value) {
   testhw::pins[pin] = value;

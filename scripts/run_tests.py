@@ -17,6 +17,8 @@ TARGETS = {
     "status": ["tests/network_status_test.cpp", "tests/test_runtime.cpp"],
     "boot": ["tests/boot_diagnostics_test.cpp", "tests/test_runtime.cpp"],
     "storage": ["tests/deferred_mount_test.cpp"],
+    "refresh_requests": ["tests/refresh_request_test.cpp"],
+    "http_refresh": ["tests/http_refresh_test.cpp", "tests/test_runtime.cpp", "src/wifi_manager.cpp"],
 }
 
 def main():

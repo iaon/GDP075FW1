@@ -2,22 +2,26 @@
 
 #include <initializer_list>
 #include <epd4c/GxEPD2_750c_GDEM075F52.h>
+#include "refresh_request.h"
 
 // Controller commands and per-byte CS/DC sequence recovered from app0.
 class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
  public:
   static const bool hasPartialUpdate = false;
-  enum class Error { None, ResetTimeout, PowerOnTimeout, RefreshTimeout,
-                     PowerOffTimeout, InvalidRows, IncompleteFrame };
+  enum class Error { None, ResetTimeout, FastSetupTimeout, PowerOnTimeout,
+                     RefreshTimeout, PowerOffTimeout, InvalidRequest,
+                     InvalidRows, IncompleteFrame };
   bool ok() const { return error_ == Error::None; }
   Error error() const { return error_; }
   const char *errorText() const {
     switch (error_) {
       case Error::None: return "ok";
       case Error::ResetTimeout: return "display reset timeout";
+      case Error::FastSetupTimeout: return "display fast setup timeout";
       case Error::PowerOnTimeout: return "display power-on timeout";
       case Error::RefreshTimeout: return "display refresh timeout";
       case Error::PowerOffTimeout: return "display power-off timeout";
+      case Error::InvalidRequest: return "invalid display refresh request";
       case Error::InvalidRows: return "invalid display rows";
       case Error::IncompleteFrame: return "incomplete display frame";
     }
@@ -33,6 +37,7 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
   void init(uint32_t baud, bool initial, uint16_t = 10, bool = false) override {
     if (baud) Serial.begin(baud);
     error_ = Error::None;
+    request_ = panel::RefreshRequest();
     _initial_write = initial;
     _power_is_on = _init_display_done = _hibernating = false;
     nextRow_ = HEIGHT;
@@ -46,13 +51,29 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
     // Reset only when a frame starts; base init would add an extra reset.
   }
 
-  void setPaged() override {
+  bool beginFrame(const panel::RefreshRequest &request) {
+    // Test registers and partial windows must not leak into another frame,
+    // including callers that start a frame without first hibernating.
+    const bool reset = !ok() || request_.mode != panel::RefreshMode::Full ||
+                       request.mode != panel::RefreshMode::Full;
     // A fresh frame is the explicit recovery point after a failed operation.
     error_ = Error::None;
-    if (!initVendor()) return;
+    if (!validRequest(request)) {
+      fail(Error::InvalidRequest);
+      return false;
+    }
+    request_ = request;
+    if (reset) _init_display_done = false;
+    if (!initVendor()) return false;
+    // Every request loads all controller RAM, even when only an ROI will be
+    // physically refreshed. No retained RAM or previous-frame seed is needed.
+    if (panel::isWindow(request_.mode)) setWindow(0, 0, WIDTH, HEIGHT, false);
     command(0x10, {});
     nextRow_ = 0;
+    return true;
   }
+
+  void setPaged() override { beginFrame(panel::RefreshRequest()); }
 
   void writeScreenBuffer(uint8_t value = 0xff) override {
     setPaged();
@@ -116,6 +137,10 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
   void refresh(bool = false) override {
     if (!ok()) return;
     if (nextRow_ != HEIGHT) { fail(Error::IncompleteFrame); return; }
+    if (panel::isWindow(request_.mode)) {
+      setWindow(request_.x, request_.y, request_.w, request_.h, true);
+      command(0x50, {0x97});
+    }
     command(0x12, {0x00});
     waitReady(Error::RefreshTimeout);
   }
@@ -139,6 +164,28 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
   }
 
  private:
+  bool validRequest(const panel::RefreshRequest &request) const {
+    switch (request.mode) {
+      case panel::RefreshMode::Full:
+      case panel::RefreshMode::FullFast:
+        return request.x == 0 && request.y == 0 && request.w == WIDTH &&
+               request.h == HEIGHT;
+      case panel::RefreshMode::Window:
+      case panel::RefreshMode::WindowFastExperimental:
+        return panel::validWindow(request);
+    }
+    return false;
+  }
+
+  void setWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool partial) {
+    const uint16_t right = x + w - 1;
+    const uint16_t bottom = y + h - 1;
+    command(0x83, {uint8_t(x >> 8), uint8_t(x), uint8_t(right >> 8),
+                   uint8_t(right), uint8_t(y >> 8), uint8_t(y),
+                   uint8_t(bottom >> 8), uint8_t(bottom),
+                   uint8_t(partial ? 1 : 0)});
+  }
+
   bool validRows(int16_t x, int16_t y, int16_t w, int16_t h) const {
     return _init_display_done && x == 0 && w == WIDTH && y == nextRow_ &&
            y >= 0 && h >= 1 && y + h <= HEIGHT;
@@ -177,6 +224,7 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
 
   bool initVendor() {
     if (_init_display_done) return true;
+    _power_is_on = false;
     delay(100);
     digitalWrite(_rst, LOW);
     delay(10);
@@ -192,6 +240,14 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
     command(0xe9, {0x01});
     command(0xf0, {0x5f});
     command(0x30, {0x08});
+    if (panel::isFast(request_.mode)) {
+      // GxEPD2 1.6.9 fast-full setup; combining it with a window is an
+      // explicit experiment, not a claim of fast-partial support.
+      command(0xe0, {0x02});
+      command(0xe6, {0x5a});
+      command(0xa5, {0x00});
+      if (!waitReady(Error::FastSetupTimeout)) return false;
+    }
     command(0x04, {});
     _power_is_on = true;  // Power-off cleanup is needed even if BUSY sticks.
     if (!waitReady(Error::PowerOnTimeout)) return false;
@@ -202,5 +258,6 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
 
   static constexpr uint32_t kBusyTimeoutMs = 50000;
   Error error_ = Error::None;
+  panel::RefreshRequest request_;
   int16_t nextRow_ = HEIGHT;
 };

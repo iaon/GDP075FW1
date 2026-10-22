@@ -1,0 +1,31 @@
+{
+  "firmware_version": "0.1.0-refresh-tests.2815758acf4e",
+  "upstream_base": "12cf0fce2637b827b3581e5925cd7de132a7f475",
+  "patch_sha256": "2815758acf4e40edb52f7c35d4ccaf06e0144a9f35094b98fd54df9681e9a621",
+  "application_bytes": 865168,
+  "application_sha256": "feff88939bca16251a1477e67b446999342675b5f5536d66b87208798c4a6038",
+  "application_offset": "0x10000",
+  "application_partition_bytes": 1310720,
+  "host_cpp_suites": 9,
+  "host_python_tests": 14,
+  "host_sanitizers": [
+    "address",
+    "undefined"
+  ],
+  "patch_apply": "clean; all 22 changed files reproduced byte-for-byte",
+  "firmware_compile": "success; espressif32@7.1.3, wemos_d1_mini32, Arduino",
+  "platformio_core": "6.2.0",
+  "framework": "4.20017.260907+sha.dcc1105b",
+  "toolchain": "xtensa-esp32@8.4.0+2021r2-patch5",
+  "libraries": {
+    "GxEPD2": "1.6.9",
+    "Adafruit GFX": "1.12.6",
+    "Adafruit BusIO": "1.17.4"
+  },
+  "linker_static_ram_bytes": 49592,
+  "linker_flash_bytes": 858597,
+  "application_validation": "ESP32 header, segment limits, checksum and appended SHA-256 valid",
+  "panel_testing": "not performed; new modes experimental",
+  "github_publication": "not performed; integration denied create-tree with HTTP 403",
+  "codex_prompt": "unchanged; future demoscene remains a separate project"
+}

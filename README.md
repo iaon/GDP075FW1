@@ -22,6 +22,8 @@ are listed in [BINARY-ANALYSIS.md](BINARY-ANALYSIS.md).
 - reproduces the original ASCII status fonts, positions and native colours;
 - drives the 800×480 four-colour panel;
 - accepts a full packed native frame on TCP port `8000` or `POST /frame/native`;
+- offers explicit experimental HTTP routes for comparing fast-full and window
+  refreshes, with per-stage timings and `GET /display/modes` capability reporting;
 - reports its address and signal at `GET /status`.
 
 Uploaded frames are staged in the SPIFFS partition while they are sent to the
@@ -165,10 +167,14 @@ propagation and recovery, per-byte CS/DC,
 DHCP-to-static transitions, SDK auto-reconnection, fragmented UART/TCP input,
 repeated failures without refresh/restart, standalone terminal line endings,
 native status frames against a separate full-frame Paint transcription,
-heartbeat/reset causes, storage failures and HTTP/TCP ownership. Python tests
-cover sender framing and ESP image checksum/hash rejection. They do not
-emulate ESP32 radio, physical
-flash or the panel. GitHub Actions runs the same checks before building.
+heartbeat/reset causes, storage failures and HTTP/TCP ownership. The refresh
+tests compile the real HTTP handlers in `main.cpp` and exercise multipart
+callbacks, strict window validation, timing reports, failure cleanup and
+mode isolation against the actual driver command trace. They simulate
+WebServer events, not its HTTP wire parser. Python tests cover sender framing,
+ESP image checksum/hash rejection and the native test images/expected window
+preview. These tests do not emulate ESP32 radio, physical flash or the panel.
+GitHub Actions runs the same checks before building.
 
 With the original dump available, verify both recovered font tables directly:
 
@@ -354,6 +360,45 @@ python3 scripts/device.py frame 192.168.1.208 frame.native
 The TCP sender closes its write side to signal frame completion. Its success
 message means the bytes were sent, not that the panel acknowledged a refresh;
 use the HTTP method above when an explicit result is desired.
+
+## Comparing display refresh modes
+
+The normal upload paths (`POST /frame/native`, legacy `POST /frame`, TCP port
+`8000`) and the network status screen continue to use the normal full refresh.
+Three additional HTTP routes expose explicit diagnostic modes:
+
+| Endpoint | Requested operation |
+|---|---|
+| `POST /frame/native/fast-full` | Experimental fast full-screen waveform |
+| `POST /frame/native/partial?x=200&y=120&w=400&h=240` | Experimental window refresh with the normal waveform |
+| `POST /frame/native/fast-window?x=200&y=120&w=400&h=240` | Experimental combination of the fast full waveform and a refresh window |
+
+All three take the same complete **96,000-byte** native frame in multipart
+field `frame`; a window request does not take a cropped image. The full frame
+is written to the panel controller's RAM before requesting the refresh window.
+This experiment does not reduce upload or RAM-write traffic. It also does not
+enable or claim GxEPD2 fast-partial-update support.
+
+For a quick capability check:
+
+```sh
+curl --fail-with-body --max-time 180 http://192.168.1.208/display/modes
+```
+
+For ordinary pictures, use the conversion procedure above, then select the
+desired endpoint. For a controlled comparison, the dependency-free generator
+creates two deliberately different images and an expected window-result preview:
+
+```sh
+python3 scripts/make_refresh_patterns.py /tmp/gdp075fw1-refresh
+```
+
+Follow [Refresh modes and manual A/B tests](docs/REFRESH-MODES.md) for the
+complete commands, strict window rules, response fields and visual checks.
+Restore the same baseline using the normal full endpoint before each test.
+Actual speed, colour quality, ghosting and unchanged pixels outside the window
+must be verified on the board; HTTP success confirms the command/BUSY sequence,
+not the optical result. The new modes have not yet been verified on hardware.
 
 ## Reported hardware verification
 

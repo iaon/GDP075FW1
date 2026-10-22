@@ -4,6 +4,9 @@
 class GxEPD2_750c_GDEM075F52 {
  public:
   static constexpr uint16_t WIDTH = 800, HEIGHT = 480;
+  static const bool hasPartialUpdate = true;
+  static const bool hasFastPartialUpdate = false;
+  static const bool useFastFullUpdate = false;
   static constexpr uint16_t full_refresh_time = 21000, power_on_time = 150, power_off_time = 100;
   GxEPD2_750c_GDEM075F52(int cs, int dc, int rst, int busy)
       : _cs(cs), _dc(dc), _rst(rst), _busy(busy) {}
