@@ -1,0 +1,13 @@
+{
+  "controller": "JD79665AA",
+  "register_lut_available": false,
+  "blocked_reason": "No confirmed register-LUT upload command lengths/phase encoding or validated GDEM075F52 profile",
+  "profiles": [],
+  "source": "https://www.laskakit.cz/user/related_files/jd79665aa_datasheet_v1.pdf",
+  "revision": "v1.0.0 (2023-08-25), sections 8.2.1, 8.2.7, 9.2, 9.4",
+  "required_evidence": [
+    "JD79665AA register-LUT write commands, exact lengths, byte order and phase/repeat/end encoding",
+    "VCOM/border/source levels and HOLD semantics including TFT residual charge",
+    "Known complete GDEM075F52 waveform and reload/temperature/Dyna interaction"
+  ]
+}

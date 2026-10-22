@@ -44,6 +44,12 @@ class WebServer {
   }
   HTTPUpload &upload() { return upload_; }
   String uri() const { return uri_; }
+  void collectHeaders(const char **, size_t) {}
+  String header(const String &name) const {
+    for (const auto &item : headers)
+      if (item.first == name.value) return item.second;
+    return String();
+  }
   int args() const { return arguments_.size(); }
   String argName(int index) const { return arguments_.at(index).first; }
   String arg(int index) const { return arguments_.at(index).second; }
@@ -65,6 +71,7 @@ class WebServer {
 
   bool beginRequest(HTTPMethod method, const std::string &url) {
     response = Response(); sendCount = 0; upload_ = HTTPUpload();
+    headers.clear();
     currentRoute_ = nullptr;
     const size_t query = url.find('?');
     uri_ = url.substr(0, query);
@@ -113,6 +120,7 @@ class WebServer {
   Response response;
   unsigned sendCount = 0;
   Handler handleClientAction;
+  Args headers;
 
  private:
   const Route *currentRoute_ = nullptr;

@@ -44,17 +44,24 @@ bool pendingStatus = false;
 struct DisplayTimings {
   uint32_t initMs = 0, writeMs = 0, refreshMs = 0, sleepMs = 0;
   bool refreshStarted = false;
+  bool busySeen = false;
+  unsigned refreshCount = 0;
+  int pllWritten = -1;
+  const char *cleanup = "not_started";
   const char *error = nullptr;
 };
 struct HttpFrameState {
   bool active = false, fileStarted = false, fileEnded = false, packedNative = true;
   panel::RefreshRequest request;
+  enum Operation { Normal, Pll, Lut, Recover } operation = Normal;
+  uint32_t id = 0;
   uint32_t startedAt = 0, uploadMs = 0;
   size_t received = 0;
   int errorCode = 400;
   const char *error = nullptr;
 };
 HttpFrameState httpFrame;
+uint32_t nextRequestId = 0;  // Monotonic within this boot, never stored in NVS.
 class StagingStorage : public FrameStorage {
  public:
   bool open() override {
@@ -100,10 +107,11 @@ bool mountFilesystem() {
 
 bool showFrame(bool packedNative,
                const panel::RefreshRequest &request = panel::RefreshRequest(),
-               DisplayTimings *measurements = nullptr) {
+               DisplayTimings *measurements = nullptr, bool white = false) {
   DisplayTimings timing;
-  File source = SPIFFS.open(kFramePath, FILE_READ);
-  if (!source || source.size() != vendor::kFrameBytes) {
+  File source;
+  if (!white) source = SPIFFS.open(kFramePath, FILE_READ);
+  if (!white && (!source || source.size() != vendor::kFrameBytes)) {
     timing.error = "frame read failed";
     if (measurements) *measurements = timing;
     return false;
@@ -114,7 +122,10 @@ bool showFrame(bool packedNative,
   timing.initMs = uint32_t(millis() - started);
   started = millis();
   for (uint16_t y = 0; y < 480 && display.epd2.ok(); ++y) {
-    if (packedNative) {
+    if (white) {
+      memset(nativeLine, 0x55, sizeof(nativeLine));
+      display.epd2.writeNative(nativeLine, nullptr, 0, y, 800, 1);
+    } else if (packedNative) {
       if (source.read(nativeLine, sizeof(nativeLine)) != sizeof(nativeLine)) {
         timing.error = "frame read failed";
         break;
@@ -135,14 +146,18 @@ bool showFrame(bool packedNative,
   timing.writeMs = uint32_t(millis() - started);
   source.close();
   if (!timing.error && display.epd2.ok()) {
-    timing.refreshStarted = true;
     started = millis();
     display.epd2.refresh(false);
     timing.refreshMs = uint32_t(millis() - started);
   }
+  timing.refreshCount = display.epd2.refreshCount();
+  timing.refreshStarted = timing.refreshCount != 0;
+  timing.busySeen = display.epd2.busyAssertSeen();
+  timing.pllWritten = display.epd2.pllWritten();
   started = millis();
   display.epd2.hibernate();
   timing.sleepMs = uint32_t(millis() - started);
+  timing.cleanup = display.epd2.cleanupState();
   if (!timing.error && !display.epd2.ok()) timing.error = display.epd2.errorText();
   if (measurements) *measurements = timing;
   return timing.error == nullptr;
@@ -165,6 +180,25 @@ void showNetworkStatus() {
 }
 
 const char *readHttpRefresh(panel::RefreshRequest &request, bool &packedNative) {
+  if (server.uri() == "/frame/native/pll") {
+    httpFrame.operation = HttpFrameState::Pll;
+    packedNative = true;
+    if (!(server.header("X-EPD-Experimental") == "1"))
+      return "require X-EPD-Experimental: 1";
+    panel::PllParameters parameters;
+    for (int i = 0; i < server.args(); ++i)
+      parameters.add(server.argName(i).c_str(), server.arg(i).c_str());
+    return parameters.finish(request);
+  }
+  if (server.uri() == "/frame/native/lut") {
+    httpFrame.operation = HttpFrameState::Lut;
+    if (!(server.header("X-EPD-Experimental") == "1"))
+      return "require X-EPD-Experimental: 1";
+    if (server.args() != 1 || !(server.argName(0) == "profile") || server.arg(0).isEmpty())
+      return "require exactly one profile query parameter";
+    httpFrame.errorCode = 501;
+    return panel::kLutBlockedReason;  // Before staging, reset, PSR or any SPI.
+  }
   if (!panel::requestForPath(server.uri().c_str(), request, packedNative))
     return "unknown frame endpoint";
   // Preserve the two original endpoints' handling of unrelated query args.
@@ -175,7 +209,8 @@ const char *readHttpRefresh(panel::RefreshRequest &request, bool &packedNative) 
   return parameters.finish(request);
 }
 
-void rejectHttpFrame(const char *error, int code = 400) {
+void rejectHttpFrame(const char *error, int code = 0) {
+  if (!code) code = httpFrame.errorCode;
   if (!httpFrame.error) { httpFrame.error = error; httpFrame.errorCode = code; }
 }
 
@@ -187,16 +222,29 @@ void discardHttpUpload() {
 void sendFrameReport(int code, const DisplayTimings &timing = DisplayTimings()) {
   const char *error = httpFrame.error ? httpFrame.error : timing.error;
   const auto &request = httpFrame.request;
-  char report[768];
+  char report[2300];
+  char written[8], requested[8];
+  const bool configKnown = httpFrame.operation != HttpFrameState::Pll || request.pllExperiment;
+  if (configKnown) snprintf(requested, sizeof(requested), "0x%02x", unsigned(request.pll));
+  else snprintf(requested, sizeof(requested), "unknown");
+  if (timing.pllWritten < 0) snprintf(written, sizeof(written), "unknown");
+  else snprintf(written, sizeof(written), "0x%02x", unsigned(timing.pllWritten));
   snprintf(report, sizeof(report),
            "%sresult=%s\nmode=%s\nexperimental=%s\n"
            "window_x=%u\nwindow_y=%u\nwindow_w=%u\nwindow_h=%u\n"
            "frame_bytes=%lu\nreceived_bytes=%lu\nrefresh_started=%s\n"
            "upload_ms=%lu\ninit_ms=%lu\nwrite_ms=%lu\nrefresh_ms=%lu\n"
-           "sleep_ms=%lu\ntotal_ms=%lu\nerror=%s\n",
+           "sleep_ms=%lu\ntotal_ms=%lu\nerror=%s\n"
+           "request_id=%lu\nfirmware_version=%s\nfirmware_git=%s\n"
+           "operation=%s\nbase_mode=%s\npll_requested=%s\npll_written=%s\n"
+           "pll_readback=false\nDyna=%d\nFR=%d\nnominal_hz=%s\n"
+           "frequency_note=FR table nominal; Dyna may vary rate; not measured\n"
+           "lut_source=factory_MTP\nprofile_id=none\nprofile_hash=none\n"
+           "pixel_encoding=native_2bpp_BWYR\nlut_load_ms=0\ncleanup_ms=%lu\n"
+           "refresh_count=%u\nbusy_assert_seen=%s\ncleanup_state=%s\ncleanup_error=%s\nblocked_reason=%s\n",
            code == 200 ? "display refreshed\n" : "", code == 200 ? "ok" : "error",
            panel::modeName(request.mode),
-           request.mode == panel::RefreshMode::Full ? "false" : "true",
+           request.mode == panel::RefreshMode::Full && httpFrame.operation == HttpFrameState::Normal ? "false" : "true",
            unsigned(request.x), unsigned(request.y), unsigned(request.w), unsigned(request.h),
            static_cast<unsigned long>(vendor::kFrameBytes),
            static_cast<unsigned long>(httpFrame.received),
@@ -207,7 +255,21 @@ void sendFrameReport(int code, const DisplayTimings &timing = DisplayTimings()) 
            static_cast<unsigned long>(timing.refreshMs),
            static_cast<unsigned long>(timing.sleepMs),
            static_cast<unsigned long>(httpFrame.active ? uint32_t(millis() - httpFrame.startedAt) : 0),
-           error ? error : "");
+           error ? error : "", static_cast<unsigned long>(httpFrame.id),
+           FIRMWARE_VERSION, FIRMWARE_GIT_SHA,
+           httpFrame.operation == HttpFrameState::Pll ? "pll" :
+           httpFrame.operation == HttpFrameState::Lut ? "lut_blocked" :
+           httpFrame.operation == HttpFrameState::Recover ? "recover" : "frame",
+           panel::modeName(request.mode), requested, written,
+           configKnown ? int((request.pll >> 3) & 1) : -1,
+           configKnown ? int(request.pll & 7) : -1,
+           configKnown ? panel::nominalHz(request.pll) : "unknown",
+           static_cast<unsigned long>(timing.sleepMs), timing.refreshCount,
+           timing.busySeen ? "true" : "false", timing.cleanup,
+           !strcmp(timing.cleanup, "power_off_timeout") ? "power_off_timeout" :
+           !strncmp(timing.cleanup, "skipped_missing_busy", 20) ? "missing_busy_outcome_unknown" :
+           !strncmp(timing.cleanup, "skipped_busy", 12) ? "busy_not_ready" : "none",
+           httpFrame.operation == HttpFrameState::Lut ? panel::kLutBlockedReason : "");
   Serial.printf("DISPLAY HTTP status=%d\n%s", code, report);
   sendText(code, report);
   discardHttpUpload();
@@ -219,6 +281,7 @@ void handleUpload() {
     if (!httpFrame.active) {
       httpFrame = HttpFrameState();
       httpFrame.active = true;
+      httpFrame.id = ++nextRequestId;
       httpFrame.startedAt = millis();
       // During upload callbacks Arduino WebServer exposes the query args;
       // multipart text fields are merged into args only before completion.
@@ -246,6 +309,7 @@ void handleUpload() {
 
 void handleFrameRequest() {
   if (!httpFrame.active) {
+    httpFrame.id = ++nextRequestId;
     // Even a request without a file should report the route it addressed.
     const char *error = readHttpRefresh(httpFrame.request, httpFrame.packedNative);
     if (error) rejectHttpFrame(error);
@@ -277,7 +341,62 @@ void handleFrameRequest() {
   sendFrameReport(ok ? 200 : 500, timing);
 }
 
+void handleRecover() {
+  httpFrame.active = true;
+  httpFrame.startedAt = millis();
+  httpFrame.id = ++nextRequestId;
+  httpFrame.operation = HttpFrameState::Recover;
+  httpFrame.request.recovery = true;
+  if (!(server.header("X-EPD-Experimental") == "1")) rejectHttpFrame("require X-EPD-Experimental: 1");
+  if (server.args()) rejectHttpFrame("recovery accepts no parameters or body fields");
+  if (upload.owner() != FrameUpload::Owner::None) rejectHttpFrame("another upload is active", 503);
+  if (httpFrame.error) { sendFrameReport(httpFrame.errorCode); return; }
+  display.epd2.resetForRecovery();
+  Serial.println("EPD recover reset + factory initialization + one full white refresh");
+  DisplayTimings timing;
+  const bool ok = showFrame(true, httpFrame.request, &timing, true);
+  sendFrameReport(ok ? 200 : 500, timing);
+}
+
+void reportExperiments() {
+  String result = "firmware_version=" FIRMWARE_VERSION "\nfirmware_git=" FIRMWARE_GIT_SHA "\n"
+    "experimental=true\npll_available=true\npll_endpoint=/frame/native/pll\n"
+    "base=full,fast-full,partial,fast-window\n"
+    "initial_pll=0x08,0x09,0x0a,0x02,0x03,0x04\n"
+    "extended_pll=other 0x00..0x0f require extended=1; reserved upper bits rejected\n"
+    "FR_nominal_hz=12.5,25,50,65,75,85,100,120\nDyna=bit3\nFR=bits2..0\n"
+    "pll_source=JD79665AA v1.0.0 8.2.11 p36\n"
+    "source_url=https://www.laskakit.cz/user/related_files/jd79665aa_datasheet_v1.pdf\n"
+    "header=X-EPD-Experimental: 1 required for PLL,LUT,recover\n"
+    "frame=exactly one multipart frame file, 96000 native bytes\n"
+    "window=x,y,w,h required only for partial/fast-window; x/w multiples of 4,w>=4,h>=2\n"
+    "pll_order=reset,stock_0x08,fast_setup_if_requested,power_on,selected_0x30,frame,refresh,sleep\n"
+    "pll_readback=false; pll_written is last transmitted byte only\n"
+    "pll_deadline_ms=240000 from driver start; refresh_wait_max_ms=180000\n"
+    "client_timeout_seconds=300; never auto-retry a POST\n"
+    "busy_assert_grace_ms=100; missing assert is error, not fast success\n"
+    "lut_available=false\nlut_profiles=none\nlut_endpoint=/frame/native/lut?profile=ID\n"
+    "bw_differential_available=false\nbw_sessions=unavailable; no retained panel state assumed\n"
+    "blocked_reason=";
+  result += panel::kLutBlockedReason;
+  result += "\nrecover=/display/recover; reset + one normal full white refresh\n"
+    "risk=experimental panel drive; timeout/recovery do not guarantee safety or repair\n"
+    "validation=host tests only; prior user timings documented separately\n";
+  sendText(200, result);
+}
+
 void configureRoutes() {
+  const char *headers[] = {"X-EPD-Experimental"};
+  server.collectHeaders(headers, 1);
+  server.on("/display/experiments", HTTP_GET, reportExperiments);
+  server.on("/display/recover", HTTP_POST, handleRecover, [] {
+    if (server.upload().status == UPLOAD_FILE_ABORTED) { discardHttpUpload(); return; }
+    if (!httpFrame.active) {
+      httpFrame = HttpFrameState();
+      httpFrame.active = true;  // Parser failures are discarded by the loop too.
+    }
+    rejectHttpFrame("recovery accepts no upload");
+  });
   server.on("/", HTTP_GET, [] {
     sendText(200,
       "GDP075FW1 firmware\n\n"
@@ -287,7 +406,10 @@ void configureRoutes() {
       "POST /frame/native/fast-full: diagnostic fast full refresh\n"
       "POST /frame/native/partial?x=200&y=120&w=400&h=240: diagnostic window refresh\n"
       "POST /frame/native/fast-window?x=200&y=120&w=400&h=240: experimental fast waveform + window\n"
-      "GET /display/modes: capabilities and test protocol\nGET /status\n");
+      "GET /display/modes: capabilities and test protocol\n"
+      "GET /display/experiments: PLL/LUT capabilities and API rules\n"
+      "POST /frame/native/pll?base=fast-full&pll=0x09: opt-in PLL experiment\n"
+      "POST /display/recover: opt-in reset and one full white refresh\nGET /status\n");
   });
   server.on("/status", HTTP_GET, [] {
     sendText(200, "ip=" + WiFi.localIP().toString() + "\nrssi=" +
@@ -321,7 +443,8 @@ void configureRoutes() {
     sendText(200, modes);
   });
   for (const char *path : {"/frame", "/frame/native", "/frame/native/fast-full",
-                           "/frame/native/partial", "/frame/native/fast-window"})
+                           "/frame/native/partial", "/frame/native/fast-window",
+                           "/frame/native/pll", "/frame/native/lut"})
     server.on(path, HTTP_POST, handleFrameRequest, handleUpload);
 }
 

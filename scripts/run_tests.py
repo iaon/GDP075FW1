@@ -25,6 +25,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sanitize", action="store_true", help="enable address/undefined-behaviour checks")
     args = parser.parse_args()
+    print("HOST TESTS: simulated GPIO/SPI/network; no device is contacted and no screen changes.", flush=True)
     flags = ["-std=c++11", "-Wall", "-Wextra", "-Werror", "-Itests/stubs", "-Isrc"]
     environment = dict(os.environ)
     if args.sanitize:
@@ -33,6 +34,7 @@ def main():
         environment["ASAN_OPTIONS"] = "detect_leaks=0"
     with tempfile.TemporaryDirectory(prefix="gdp075fw1-tests-") as directory:
         for name, sources in TARGETS.items():
+            print(f"Compile and run: {name}", flush=True)
             binary = str(Path(directory) / name)
             subprocess.run(shlex.split(os.environ.get("CXX", "g++")) + flags + sources +
                            ["-o", binary], cwd=PROJECT, check=True)

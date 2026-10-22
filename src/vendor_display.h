@@ -10,7 +10,12 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
   static const bool hasPartialUpdate = false;
   enum class Error { None, ResetTimeout, FastSetupTimeout, PowerOnTimeout,
                      RefreshTimeout, PowerOffTimeout, InvalidRequest,
-                     InvalidRows, IncompleteFrame };
+                     InvalidRows, IncompleteFrame, BusyNotAsserted, BusyBeforeCommand };
+  bool busyAssertSeen() const { return refreshBusySeen_; }
+  unsigned refreshCount() const { return refreshCount_; }
+  int pllWritten() const { return pllWritten_; }
+  const char *cleanupState() const { return cleanupState_; }
+  void resetForRecovery() { _init_display_done = false; }
   bool ok() const { return error_ == Error::None; }
   Error error() const { return error_; }
   const char *errorText() const {
@@ -24,6 +29,8 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
       case Error::InvalidRequest: return "invalid display refresh request";
       case Error::InvalidRows: return "invalid display rows";
       case Error::IncompleteFrame: return "incomplete display frame";
+      case Error::BusyNotAsserted: return "refresh BUSY did not assert; outcome unknown";
+      case Error::BusyBeforeCommand: return "display busy before command";
     }
     return "display error";
   }
@@ -55,9 +62,15 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
     // Test registers and partial windows must not leak into another frame,
     // including callers that start a frame without first hibernating.
     const bool reset = !ok() || request_.mode != panel::RefreshMode::Full ||
-                       request.mode != panel::RefreshMode::Full;
+                       request.mode != panel::RefreshMode::Full ||
+                       request_.pllExperiment || request.pllExperiment || request.recovery;
     // A fresh frame is the explicit recovery point after a failed operation.
     error_ = Error::None;
+    pllWritten_ = -1;
+    refreshBusySeen_ = false;
+    refreshCount_ = 0;
+    cleanupState_ = "not_started";
+    operationStarted_ = millis();
     if (!validRequest(request)) {
       fail(Error::InvalidRequest);
       return false;
@@ -137,19 +150,33 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
   void refresh(bool = false) override {
     if (!ok()) return;
     if (nextRow_ != HEIGHT) { fail(Error::IncompleteFrame); return; }
+    if (digitalRead(_busy) == LOW) { fail(Error::BusyBeforeCommand); return; }
     if (panel::isWindow(request_.mode)) {
       setWindow(request_.x, request_.y, request_.w, request_.h, true);
       command(0x50, {0x97});
     }
     command(0x12, {0x00});
-    waitReady(Error::RefreshTimeout);
+    ++refreshCount_;
+    waitReady(Error::RefreshTimeout, request_.pllExperiment || request_.recovery);
   }
   void refresh(int16_t, int16_t, int16_t, int16_t) override { refresh(false); }
 
   void powerOff() override {
+    if (error_ == Error::BusyNotAsserted) {
+      cleanupState_ = "skipped_missing_busy; outcome unknown";
+      return;  // Do not risk cutting off a refresh whose start was not observed.
+    }
     if (_power_is_on) {
+      if (digitalRead(_busy) == LOW) {
+        cleanupState_ = "skipped_busy; power state unknown";
+        fail(Error::BusyBeforeCommand);
+        return;
+      }
       command(0x02, {0x00});
-      waitReady(Error::PowerOffTimeout);
+      if (!waitReady(Error::PowerOffTimeout)) {
+        cleanupState_ = "power_off_timeout";
+        return;
+      }
     }
     _power_is_on = false;
   }
@@ -157,7 +184,18 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
   void hibernate() override {
     // Cleanup must preserve the first failure for callers, including HTTP.
     powerOff();
+    if (error_ == Error::BusyNotAsserted || !strcmp(cleanupState_, "power_off_timeout")) {
+      _init_display_done = false;
+      return;
+    }
+    if (digitalRead(_busy) == LOW) {
+      if (!strcmp(cleanupState_, "not_started")) cleanupState_ = "skipped_busy; power state unknown";
+      fail(Error::BusyBeforeCommand);
+      _init_display_done = false;
+      return;  // No ordinary commands while BUSY, including sleep after timeout.
+    }
     command(0x07, {0xa5});
+    cleanupState_ = "sleep_sent; not read back";
     _hibernating = true;
     _init_display_done = false;
     nextRow_ = HEIGHT;
@@ -165,6 +203,8 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
 
  private:
   bool validRequest(const panel::RefreshRequest &request) const {
+    if (request.pllExperiment && !panel::allowedPll(request.pll, request.extendedPll)) return false;
+    if (!request.pllExperiment && request.pll != 0x08) return false;
     switch (request.mode) {
       case panel::RefreshMode::Full:
       case panel::RefreshMode::FullFast:
@@ -194,17 +234,32 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
     if (ok()) error_ = error;
     _init_display_done = false;
   }
-  bool waitReady(Error error) {
+  bool waitReady(Error error, bool requireAssert = false) {
     const uint32_t start = millis();
-    delay(1);  // Allow BUSY to become active after the command.
+    bool seen = digitalRead(_busy) == LOW;
+    delay(1);
+    if (requireAssert) {
+      // A high pin alone cannot establish a completed experimental refresh.
+      while (!seen && uint32_t(millis() - start) < 100) {
+        seen = digitalRead(_busy) == LOW;
+        if (!seen) delay(1);
+      }
+      refreshBusySeen_ = seen;
+      if (!seen) { fail(Error::BusyNotAsserted); return false; }
+    }
     while (digitalRead(_busy) == LOW) {
-      if (uint32_t(millis() - start) >= kBusyTimeoutMs) {
+      if (error == Error::RefreshTimeout) refreshBusySeen_ = true;
+      const uint32_t timeout = request_.pllExperiment && error == Error::RefreshTimeout ?
+                               180000 : kBusyTimeoutMs;
+      if (uint32_t(millis() - start) >= timeout ||
+          (request_.pllExperiment && uint32_t(millis() - operationStarted_) >= 240000)) {
         fail(error);
         Serial.println(errorText());
         return false;
       }
       delay(1);  // Yield to the ESP32 scheduler/watchdog.
     }
+    if (error == Error::RefreshTimeout && seen) refreshBusySeen_ = true;
     return true;
   }
   void writeByte(uint8_t value, bool data) {
@@ -218,6 +273,11 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
   }
   void dataByte(uint8_t value) { writeByte(value, true); }
   void command(uint8_t value, std::initializer_list<uint8_t> data) {
+    if (request_.pllExperiment || request_.recovery) {
+      Serial.printf("EPD cfg cmd=0x%02x n=%u", unsigned(value), unsigned(data.size()));
+      for (uint8_t byte : data) Serial.printf(" %02x", unsigned(byte));
+      Serial.println();
+    }
     writeByte(value, false);
     for (uint8_t byte : data) dataByte(byte);
   }
@@ -240,6 +300,7 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
     command(0xe9, {0x01});
     command(0xf0, {0x5f});
     command(0x30, {0x08});
+    pllWritten_ = 0x08;
     if (panel::isFast(request_.mode)) {
       // GxEPD2 1.6.9 fast-full setup; combining it with a window is an
       // explicit experiment, not a claim of fast-partial support.
@@ -251,6 +312,12 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
     command(0x04, {});
     _power_is_on = true;  // Power-off cleanup is needed even if BUSY sticks.
     if (!waitReady(Error::PowerOnTimeout)) return false;
+    if (request_.pllExperiment) {
+      // Reapply AFTER A5 factory/fast setup AND PON, while idle, before DTM/DRF.
+      // This is the last transmitted value, not electrical register readback.
+      command(0x30, {request_.pll});
+      pllWritten_ = request_.pll;
+    }
     _init_display_done = true;
     _hibernating = false;
     return true;
@@ -260,4 +327,9 @@ class VendorGDEM075F52 : public GxEPD2_750c_GDEM075F52 {
   Error error_ = Error::None;
   panel::RefreshRequest request_;
   int16_t nextRow_ = HEIGHT;
+  uint32_t operationStarted_ = 0;
+  int pllWritten_ = -1;
+  bool refreshBusySeen_ = false;
+  unsigned refreshCount_ = 0;
+  const char *cleanupState_ = "not_started";
 };

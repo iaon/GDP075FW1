@@ -3,7 +3,13 @@
 This firmware exposes three experimental refresh routes for the GDEM075F52
 800×480 four-colour panel. They let you upload your own images and compare
 the controller's behaviour with the existing full refresh. The new modes
-have not yet been verified on hardware.
+are covered by host tests. User-reported panel measurements on 2026-10-22:
+full 22079–22082 ms, partial 400×240 22074 ms, fast-full 12246 ms,
+fast-window 400×240 12234 ms and 40×20 12231 ms. The user reports no flicker
+or image changes outside the 400×240 fast window, with mild artifacts in
+fast-full. These are user observations, not automated or independently
+reproduced measurements. For further PLL research and blocked register-LUT
+capabilities, see [LUT/PLL experiments](LUT-PLL-EXPERIMENTS.md).
 
 `POST /frame/native`, legacy `POST /frame`, TCP port `8000`, and the network
 status picture retain the normal full-refresh behaviour. Selecting an

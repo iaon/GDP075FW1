@@ -172,7 +172,7 @@ void testFastSetupFailure(const std::vector<trace::Command> &normalInit) {
     assert(commandCount(0x12) == 0);
     display.hibernate();
     assert(display.error() == VendorGDEM075F52::Error::FastSetupTimeout);
-    assert(trace::commands.back().command == 0x07);
+    assert(trace::commands.back().command == 0xa5);  // BUSY stuck: no sleep command.
 
     testhw::busyStuck = false;
     testhw::stuckOnCommand = -1;

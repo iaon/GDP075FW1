@@ -156,6 +156,10 @@ Optional picture-conversion/UART tools installed into another environment
 
 ## Checks without a board
 
+These checks do not contact an IP address and do not change the physical panel.
+For single on-device PLL measurements, result logs and recovery commands, see
+[LUT/PLL experiments](docs/LUT-PLL-EXPERIMENTS.md). That tool uses `EPD_URL`.
+
 ```sh
 python3 scripts/run_tests.py --sanitize
 ```
